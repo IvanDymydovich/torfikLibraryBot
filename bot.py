@@ -1,17 +1,25 @@
-import json
 import os
+import json
 from telegram import (
     Update, InlineKeyboardMarkup, InlineKeyboardButton
 )
+from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
     ConversationHandler, MessageHandler, CallbackQueryHandler, filters
 )
 
+# Стани діалогу
 ASK_TITLE, ASK_AUTHOR = range(2)
-BOOKS_FILE = "books.json"
 
-# Завантаження і збереження книг
+# Файл і папка для збереження
+BOOKS_FILE = "books.json"
+PDF_FOLDER = "pdf_books"
+
+# ----------------------------------------
+# 🔃 Завантаження/збереження книжок
+# ----------------------------------------
+
 def load_books():
     if os.path.exists(BOOKS_FILE):
         with open(BOOKS_FILE, "r", encoding="utf-8") as f:
@@ -24,7 +32,11 @@ def save_books(books):
 
 my_books = load_books()
 
-# Команда /start з кнопками
+# ----------------------------------------
+# 📚 Обробники
+# ----------------------------------------
+
+# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
@@ -39,7 +51,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# Обробка callback-кнопок
+# Обробка кнопок
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -55,13 +67,13 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Введи назву книжки 📖:")
         return ASK_TITLE
 
-# Крок 1: Введення назви
+# Початок діалогу /add
 async def ask_author(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['title'] = update.message.text
     await update.message.reply_text("Хто автор цієї книжки? ✍️")
     return ASK_AUTHOR
 
-# Крок 2: Введення автора
+# Завершення діалогу
 async def finish_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     author = update.message.text
     title = context.user_data.get('title', 'Без назви')
@@ -71,22 +83,44 @@ async def finish_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Книжку додано: {entry}")
     return ConversationHandler.END
 
-# Вихід з діалогу
+# Скасування додавання
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Додавання скасовано.")
     return ConversationHandler.END
 
-# Запуск
+# Отримати PDF книжку
+async def get_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "❗ Напиши назву книжки після команди. Наприклад:\n"
+            "`/get Маленький принц — Екзюпері`", parse_mode="Markdown"
+        )
+        return
+
+    filename = " ".join(context.args).strip() + ".pdf"
+    file_path = os.path.join(PDF_FOLDER, filename)
+
+    if not os.path.exists(file_path):
+        await update.message.reply_text("📂 Цієї книжки не знайдено у форматі PDF 😔")
+        return
+
+    await update.message.chat.send_action(action=ChatAction.UPLOAD_DOCUMENT)
+    await update.message.reply_document(document=open(file_path, "rb"), filename=filename)
+
+# ----------------------------------------
+# 🏁 Запуск бота
+# ----------------------------------------
+
 if __name__ == '__main__':
-    TOKEN = "7838786752:AAEWC6yMnU9kqWa2mNMGMbYzwxK9rhsMOCU"
+    TOKEN = os.getenv("TOKEN")  # 🔐 Безпечне завантаження токена
 
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-
-    # Кнопки меню
+    app.add_handler(CommandHandler("get", get_book))
     app.add_handler(CallbackQueryHandler(handle_button, pattern="^books$"))
-    # Діалог додавання
+
+    # Діалогове додавання
     conv_handler = ConversationHandler(
         per_message=True,
         entry_points=[
@@ -101,5 +135,5 @@ if __name__ == '__main__':
     )
     app.add_handler(conv_handler)
 
-    print("✅ Бот працює з кнопками!")
+    print("✅ Бот працює!")
     app.run_polling()
