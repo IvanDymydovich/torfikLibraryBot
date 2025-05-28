@@ -1,5 +1,6 @@
 import os
 import json
+import random
 from telegram import (
     Update, InlineKeyboardMarkup, InlineKeyboardButton
 )
@@ -9,16 +10,9 @@ from telegram.ext import (
     ConversationHandler, MessageHandler, CallbackQueryHandler, filters
 )
 
-# Стани діалогу
 ASK_TITLE, ASK_AUTHOR = range(2)
-
-# Файл і папка для збереження
 BOOKS_FILE = "books.json"
 PDF_FOLDER = "pdf_books"
-
-# ----------------------------------------
-# 🔃 Завантаження/збереження книжок
-# ----------------------------------------
 
 def load_books():
     if os.path.exists(BOOKS_FILE):
@@ -32,26 +26,17 @@ def save_books(books):
 
 my_books = load_books()
 
-# ----------------------------------------
-# 📚 Обробники
-# ----------------------------------------
-
-# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
             InlineKeyboardButton("📚 Список книжок", callback_data="books"),
             InlineKeyboardButton("➕ Додати книжку", callback_data="add")
-        ]
+        ],
+        [InlineKeyboardButton("🎲 Що почитати?", callback_data="recommend")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Привіт! Обери дію нижче:", reply_markup=reply_markup)
 
-    await update.message.reply_text(
-        "Привіт! Обери дію нижче:",
-        reply_markup=reply_markup
-    )
-
-# Обробка кнопок
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -67,13 +52,37 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Введи назву книжки 📖:")
         return ASK_TITLE
 
-# Початок діалогу /add
+    elif query.data == "recommend":
+        if not my_books:
+            await query.edit_message_text("📂 У мене ще немає книжок для порад 😥")
+            return
+
+        recommendations = random.sample(my_books, min(3, len(my_books)))
+        buttons = [
+            [InlineKeyboardButton(f"📄 {title}", callback_data=f"get::{title}")]
+            for title in recommendations
+        ]
+        reply_markup = InlineKeyboardMarkup(buttons)
+
+        text = "📖 *Що почитати сьогодні?*\n\n" + "\n".join(f"🔹 {t}" for t in recommendations)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+    elif query.data.startswith("get::"):
+        name = query.data.replace("get::", "")
+        filename = name.replace("📘 ", "").strip() + ".pdf"
+        file_path = os.path.join(PDF_FOLDER, filename)
+
+        if os.path.exists(file_path):
+            await query.message.chat.send_action(action=ChatAction.UPLOAD_DOCUMENT)
+            await query.message.reply_document(document=open(file_path, "rb"), filename=filename)
+        else:
+            await query.message.reply_text("📂 Цю книжку не знайдено у форматі PDF 😥")
+
 async def ask_author(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['title'] = update.message.text
     await update.message.reply_text("Хто автор цієї книжки? ✍️")
     return ASK_AUTHOR
 
-# Завершення діалогу
 async def finish_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     author = update.message.text
     title = context.user_data.get('title', 'Без назви')
@@ -83,17 +92,15 @@ async def finish_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ Книжку додано: {entry}")
     return ConversationHandler.END
 
-# Скасування додавання
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Додавання скасовано.")
     return ConversationHandler.END
 
-# Отримати PDF книжку
 async def get_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "❗ Напиши назву книжки після команди. Наприклад:\n"
-            "`/get Маленький принц — Екзюпері`", parse_mode="Markdown"
+            "`/get Наодинці з собою — Марк Аврелій`", parse_mode="Markdown"
         )
         return
 
@@ -107,20 +114,29 @@ async def get_book(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action=ChatAction.UPLOAD_DOCUMENT)
     await update.message.reply_document(document=open(file_path, "rb"), filename=filename)
 
-# ----------------------------------------
-# 🏁 Запуск бота
-# ----------------------------------------
+async def recommend_books(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not my_books:
+        await update.message.reply_text("📂 У мене ще немає книжок для порад 😥")
+        return
+
+    recommendations = random.sample(my_books, min(3, len(my_books)))
+    buttons = [
+        [InlineKeyboardButton(f"📄 {title}", callback_data=f"get::{title}")]
+        for title in recommendations
+    ]
+    reply_markup = InlineKeyboardMarkup(buttons)
+
+    text = "📖 *Що почитати сьогодні?*\n\n" + "\n".join(f"🔹 {t}" for t in recommendations)
+    await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 if __name__ == '__main__':
-    TOKEN = os.getenv("TOKEN")  # 🔐 Безпечне завантаження токена
-
+    TOKEN = os.getenv("TOKEN")
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("get", get_book))
-    app.add_handler(CallbackQueryHandler(handle_button, pattern="^books$"))
+    app.add_handler(CommandHandler("recommend", recommend_books))
 
-    # Діалогове додавання
     conv_handler = ConversationHandler(
         per_message=True,
         entry_points=[
@@ -134,6 +150,7 @@ if __name__ == '__main__':
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(handle_button))
 
     print("✅ Бот працює!")
     app.run_polling()
